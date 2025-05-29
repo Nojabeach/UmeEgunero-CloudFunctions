@@ -1,65 +1,84 @@
-# UmeEgunero Cloud Functions
+# Cloud Functions para UmeEgunero
 
-Este repositorio contiene las Cloud Functions para el proyecto UmeEgunero.
+Este directorio contiene las Firebase Cloud Functions utilizadas por la aplicación UmeEgunero.
 
 ## Descripción
 
-Las Cloud Functions manejan las siguientes funcionalidades:
-- **notifyOnNewUnifiedMessage**: Notificaciones push para mensajes unificados (usa servicio GAS)
-- **notifyOnNewMessage**: Notificaciones para mensajes regulares (compatibilidad)
-- **notifyOnNewSolicitudVinculacion**: Notificaciones para nuevas solicitudes de vinculación
-- **notifyOnSolicitudVinculacionUpdated**: Notificaciones cuando se procesan solicitudes
+Las Cloud Functions manejan la lógica del servidor, incluyendo:
+- Envío de notificaciones push cuando se crean nuevos mensajes
+- Notificaciones para solicitudes de vinculación
+- Integración con Google Apps Script para servicios externos
 
 ## Estructura
 
 ```
 cloud-functions/
 ├── functions/
-│   ├── index.js         # Código principal de las funciones
-│   ├── package.json     # Dependencias
-│   └── .eslintrc.js     # Configuración de linting
-├── firebase.json        # Configuración de Firebase
-└── .firebaserc          # Proyecto de Firebase
+│   ├── index.js          # Funciones principales
+│   ├── package.json      # Dependencias
+│   └── .gitignore       # Archivos ignorados
+└── README.md            # Este archivo
 ```
 
-## Instalación
+## Funciones Implementadas
 
-1. Instalar dependencias:
-```bash
-cd functions
-npm install
-```
+### 1. `notifyOnNewUnifiedMessage`
+- **Trigger**: Creación de documento en `unified_messages`
+- **Descripción**: Envía notificaciones push cuando se crea un nuevo mensaje unificado
+- **Integración**: Llama al servicio de Google Apps Script para enviar notificaciones FCM
 
-2. Configurar Firebase:
-```bash
-firebase use umeegunero
-```
+### 2. `notifyOnNewMessage`
+- **Trigger**: Creación de documento en `messages` (compatibilidad)
+- **Descripción**: Maneja mensajes del sistema antiguo
+- **Integración**: Similar a la función unificada
+
+### 3. `notifyOnNewSolicitudVinculacion`
+- **Trigger**: Creación de documento en `solicitudes_vinculacion`
+- **Descripción**: Notifica a administradores cuando hay nuevas solicitudes
+- **Integración**: Envío directo de notificaciones FCM
+
+### 4. `notifyOnSolicitudVinculacionUpdated`
+- **Trigger**: Actualización de documento en `solicitudes_vinculacion`
+- **Descripción**: Notifica al familiar cuando su solicitud es procesada
+- **Integración**: FCM + Email vía Google Apps Script
+
+## Configuración
+
+Las funciones utilizan las siguientes URLs de servicios externos (Google Apps Script):
+
+- **Email Service**: Para envío de emails transaccionales
+- **Messaging Service**: Para procesamiento de notificaciones push
+
+Estas URLs están configuradas directamente en el código y deben actualizarse si los servicios GAS cambian.
 
 ## Despliegue
 
-Para desplegar las funciones:
 ```bash
+cd functions
+npm install
 firebase deploy --only functions
 ```
 
-## Integración con servicios GAS
+## Desarrollo Local
 
-Las funciones están integradas con Google Apps Script para:
-- Envío de emails mediante plantillas
-- Notificaciones push
-- Eliminación de usuarios (solo desde la app)
+Para probar las funciones localmente:
 
-Las URLs de los servicios GAS están configuradas en el código.
-
-## Desarrollo
-
-Para ejecutar las funciones localmente:
 ```bash
+cd functions
+npm install
 firebase emulators:start --only functions
 ```
 
-## Notas importantes
+## Notas Importantes
 
-- Este es un submódulo del repositorio principal [UmeEgunero](https://github.com/Nojabeach/UmeEgunero)
-- Las funciones se ejecutan en Node.js 20
-- Se requiere Firebase CLI para el despliegue 
+- Las funciones dependen de servicios externos de Google Apps Script
+- Los tokens FCM se obtienen de los documentos de usuario en Firestore
+- Las notificaciones incluyen datos específicos para la navegación en la app
+
+## Mantenimiento
+
+Para actualizar las funciones:
+1. Modificar el código en `functions/index.js`
+2. Probar localmente con emuladores
+3. Desplegar con `firebase deploy --only functions`
+4. Verificar en la consola de Firebase que las funciones estén activas 

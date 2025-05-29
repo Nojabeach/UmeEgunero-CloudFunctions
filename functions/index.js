@@ -39,13 +39,21 @@ exports.notifyOnNewUnifiedMessage = onDocumentCreated("unified_messages/{message
     participantsIds.push(newMessage.receiverId);
   } 
   // Si es un mensaje grupal, notificar a todos los receptores
-  else if (Array.isArray(newMessage.receiversIds) && newMessage.receiversIds.length > 0) {
-    participantsIds = newMessage.receiversIds;
-  } 
-  // Si no hay destinatarios explícitos, es posible que sea una notificación para todos
-  else {
-    // Aquí podrías implementar lógica para determinar a quién notificar
-    console.log("Mensaje sin destinatarios explícitos, no se enviarán notificaciones push");
+  if (Array.isArray(newMessage.receiversIds) && newMessage.receiversIds.length > 0) {
+    // Agregar todos los IDs de receiversIds que no estén ya en participantsIds
+    newMessage.receiversIds.forEach(id => {
+      if (!participantsIds.includes(id)) {
+        participantsIds.push(id);
+      }
+    });
+  }
+  
+  // Filtrar el senderId de los participantes (no notificar al que envía)
+  participantsIds = participantsIds.filter(id => id !== senderId);
+  
+  // Si no hay destinatarios después de filtrar, no enviar notificaciones
+  if (participantsIds.length === 0) {
+    console.log("Mensaje sin destinatarios válidos para notificar, no se enviarán notificaciones push");
     return;
   }
   
