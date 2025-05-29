@@ -7,6 +7,15 @@ const {onDocumentCreated, onDocumentUpdated} = require("firebase-functions/v2/fi
 const fetch = require("node-fetch");
 const admin = require("firebase-admin");
 
+// Importar funciones de autenticación personalizada
+// Nota: estas funciones usan Firebase Functions v1, no v2
+const {
+  syncUserCustomClaims,
+  setUserClaimsById,
+  syncClaimsOnUserUpdate,
+  setClaimsOnNewUser
+} = require("./setUserCustomClaims");
+
 admin.initializeApp();
 
 // URLs de los servicios Google Apps Script desplegados
@@ -654,7 +663,7 @@ exports.deleteUserByEmail = onDocumentCreated("user_deletion_requests/{requestId
       userRecord = await admin.auth().getUserByEmail(request.email);
       console.log(`✅ Usuario encontrado - UID: ${userRecord.uid}`);
     } catch (error) {
-      if (error.code === 'auth/user-not-found') {
+      if (error.code === "auth/user-not-found") {
         console.log(`⚠️ Usuario no encontrado en Firebase Auth: ${request.email}`);
         // Actualizar el documento indicando que no se encontró
         await admin.firestore().collection("user_deletion_requests").doc(requestId).update({
@@ -705,18 +714,18 @@ exports.deleteUserByEmail = onDocumentCreated("user_deletion_requests/{requestId
 // Función HTTP para crear solicitudes de eliminación (opcional, para testing)
 exports.requestUserDeletion = require("firebase-functions").https.onRequest(async (req, res) => {
   // Habilitar CORS
-  res.set('Access-Control-Allow-Origin', '*');
+  res.set("Access-Control-Allow-Origin", "*");
   
-  if (req.method === 'OPTIONS') {
-    res.set('Access-Control-Allow-Methods', 'POST');
-    res.set('Access-Control-Allow-Headers', 'Content-Type');
-    res.set('Access-Control-Max-Age', '3600');
-    res.status(204).send('');
+  if (req.method === "OPTIONS") {
+    res.set("Access-Control-Allow-Methods", "POST");
+    res.set("Access-Control-Allow-Headers", "Content-Type");
+    res.set("Access-Control-Max-Age", "3600");
+    res.status(204).send("");
     return;
   }
   
-  if (req.method !== 'POST') {
-    res.status(405).send('Method Not Allowed');
+  if (req.method !== "POST") {
+    res.status(405).send("Method Not Allowed");
     return;
   }
   
@@ -725,12 +734,12 @@ exports.requestUserDeletion = require("firebase-functions").https.onRequest(asyn
   // Validación básica de API Key (puedes mejorar esto)
   const EXPECTED_API_KEY = process.env.DELETE_USER_API_KEY || "tu-api-key-secreta";
   if (apiKey !== EXPECTED_API_KEY) {
-    res.status(401).json({ success: false, error: 'API Key inválida' });
+    res.status(401).json({ success: false, error: "API Key inválida" });
     return;
   }
   
   if (!email) {
-    res.status(400).json({ success: false, error: 'Email requerido' });
+    res.status(400).json({ success: false, error: "Email requerido" });
     return;
   }
   
@@ -747,12 +756,123 @@ exports.requestUserDeletion = require("firebase-functions").https.onRequest(asyn
     
     res.status(200).json({ 
       success: true, 
-      message: 'Solicitud de eliminación creada',
+      message: "Solicitud de eliminación creada",
       requestId: docRef.id 
     });
     
   } catch (error) {
-    console.error('Error creando solicitud:', error);
+    console.error("Error creando solicitud:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Función HTTP para actualizar el firebaseUid de un usuario
+exports.updateUserFirebaseUid = require("firebase-functions").https.onRequest(async (req, res) => {
+  // Habilitar CORS
+  res.set("Access-Control-Allow-Origin", "*");
+  
+  if (req.method === "OPTIONS") {
+    res.set("Access-Control-Allow-Methods", "POST");
+    res.set("Access-Control-Allow-Headers", "Content-Type");
+    res.set("Access-Control-Max-Age", "3600");
+    res.status(204).send("");
+    return;
+  }
+  
+  if (req.method !== "POST") {
+    res.status(405).send("Method Not Allowed");
+    return;
+  }
+  
+  const { dni, firebaseUid, apiKey } = req.body;
+  
+  // Validación básica de API Key
+  const EXPECTED_API_KEY = process.env.ADMIN_API_KEY || "clave-secreta-para-produccion";
+  if (apiKey !== EXPECTED_API_KEY) {
+    res.status(401).json({ success: false, error: "API Key inválida" });
+    return;
+  }
+  
+  if (!dni || !firebaseUid) {
+    res.status(400).json({ success: false, error: "DNI y firebaseUid son requeridos" });
+    return;
+  }
+  
+  try {
+    // Actualizar el documento
+    await admin.firestore().collection("usuarios").doc(dni).update({
+      firebaseUid: firebaseUid
+    });
+    
+    // Verificar que se haya actualizado correctamente
+    const userDoc = await admin.firestore().collection("usuarios").doc(dni).get();
+    const userData = userDoc.data();
+    
+    console.log(`✅ Usuario ${dni} actualizado con firebaseUid: ${firebaseUid}`);
+    
+    // Intentar establecer custom claims para el usuario
+    try {
+      // Determinar roles basados en perfiles
+      const perfiles = userData.perfiles || [];
+      let isProfesor = false;
+      let isAdmin = false;
+      let isAdminApp = false;
+      
+      perfiles.forEach(perfil => {
+        const tipo = perfil.tipo;
+        if (tipo === "PROFESOR") {
+          isProfesor = true;
+        } else if (tipo === "ADMIN_CENTRO") {
+          isAdmin = true;
+        } else if (tipo === "ADMIN_APP") {
+          isAdminApp = true;
+        }
+      });
+      
+      // Preparar custom claims
+      const customClaims = {
+        dni: dni,
+        isProfesor: isProfesor,
+        isAdmin: isAdmin,
+        isAdminApp: isAdminApp
+      };
+      
+      // Establecer custom claims
+      await admin.auth().setCustomUserClaims(firebaseUid, customClaims);
+      
+      console.log(`✅ Custom claims establecidos para ${dni}:`, customClaims);
+      
+      res.status(200).json({
+        success: true,
+        message: `Usuario ${dni} actualizado correctamente`,
+        userData: {
+          dni: userData.dni,
+          nombre: userData.nombre,
+          apellidos: userData.apellidos,
+          email: userData.email,
+          firebaseUid: userData.firebaseUid
+        },
+        customClaims: customClaims
+      });
+    } catch (claimsError) {
+      console.error(`❌ Error al establecer custom claims:`, claimsError);
+      
+      // Todavía consideramos la operación exitosa si se actualizó el documento
+      res.status(200).json({
+        success: true,
+        message: `Usuario ${dni} actualizado, pero hubo un error al establecer custom claims`,
+        error: claimsError.message,
+        userData: {
+          dni: userData.dni,
+          nombre: userData.nombre,
+          apellidos: userData.apellidos,
+          email: userData.email,
+          firebaseUid: userData.firebaseUid
+        }
+      });
+    }
+  } catch (error) {
+    console.error(`❌ Error al actualizar usuario:`, error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -779,4 +899,10 @@ function getChannelIdForMessageType(messageType) {
       return "channel_general";
   }
 }
-*/ 
+*/
+
+// Reexportar funciones de autenticación personalizada
+exports.syncUserCustomClaims = syncUserCustomClaims;
+exports.setUserClaimsById = setUserClaimsById;
+exports.syncClaimsOnUserUpdate = syncClaimsOnUserUpdate;
+exports.setClaimsOnNewUser = setClaimsOnNewUser; 

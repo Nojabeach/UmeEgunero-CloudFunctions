@@ -1,6 +1,76 @@
-# Cloud Functions para UmeEgunero
+# UmeEgunero Firebase Cloud Functions
 
-Este directorio contiene las Firebase Cloud Functions utilizadas por la aplicación UmeEgunero.
+Este directorio contiene las Cloud Functions utilizadas por la aplicación UmeEgunero.
+
+## Funciones Implementadas
+
+### Notificaciones
+
+- **notifyOnNewUnifiedMessage**: Envía notificaciones push cuando se crea un nuevo mensaje en la colección `unified_messages`.
+  - Detecta si es un mensaje individual (receiverId) o grupal (receiversIds)
+  - Filtra para no enviar notificaciones al emisor del mensaje
+
+### Solicitudes de vinculación
+
+- **notifyOnNewVinculationRequest**: Envía notificaciones a los administradores cuando un familiar solicita vinculación con un alumno.
+- **notifyOnVinculationRequestUpdate**: Notifica al familiar cuando su solicitud de vinculación es procesada.
+
+### Eliminación de usuarios
+
+- **deleteUserByEmail**: Elimina completamente un usuario de Firebase Auth y actualiza el estado en Firestore.
+  - Se activa cuando se crea un documento en la colección `user_deletion_requests`
+  - Actualiza el documento con el estado del proceso (COMPLETED/ERROR)
+- **requestUserDeletion**: Endpoint HTTP para solicitar eliminación de usuarios (para pruebas).
+
+### Custom Claims
+
+- **setClaimsOnNewUser**: Establece automáticamente los custom claims cuando se crea un nuevo usuario.
+  - Analiza los perfiles del usuario para determinar sus roles (isProfesor, isAdmin, isAdminApp)
+  - Añade el DNI como claim para utilizarlo en las reglas de seguridad
+
+- **syncClaimsOnUserUpdate**: Actualiza los custom claims cuando se modifica un usuario en Firestore.
+  - Solo se ejecuta si los perfiles o el DNI han cambiado
+  - Mantiene sincronizados los permisos en Auth con la información en Firestore
+
+- **syncUserCustomClaims**: Función HTTP para sincronizar todos los claims de usuarios existentes.
+  - Útil para actualizar todos los usuarios cuando se implementan nuevas reglas
+  - Requiere una clave API para proteger el acceso
+
+- **setUserClaimsById**: Función HTTPS callable para establecer claims a un usuario específico.
+  - Solo puede ser llamada por administradores
+  - Permite modificar manualmente los claims de un usuario
+
+## Comandos Útiles
+
+### Desplegar todas las funciones
+
+```bash
+firebase deploy --only functions
+```
+
+### Desplegar una función específica
+
+```bash
+firebase deploy --only functions:nombreDeLaFuncion
+```
+
+### Desplegar solo las nuevas funciones de custom claims
+
+```bash
+firebase deploy --only functions:setClaimsOnNewUser,functions:syncClaimsOnUserUpdate,functions:syncUserCustomClaims,functions:setUserClaimsById
+```
+
+### Ver logs
+
+```bash
+firebase functions:log
+```
+
+## Notas importantes
+
+- Todas las funciones utilizan Firebase Admin SDK para acceder a Firestore y Authentication.
+- Las funciones relacionadas con notificaciones requieren tokens FCM válidos almacenados en los documentos de usuario.
+- Las funciones para custom claims son esenciales para que las reglas de seguridad de Firestore funcionen correctamente.
 
 ## Descripción
 
@@ -19,28 +89,6 @@ cloud-functions/
 │   └── .gitignore       # Archivos ignorados
 └── README.md            # Este archivo
 ```
-
-## Funciones Implementadas
-
-### 1. `notifyOnNewUnifiedMessage`
-- **Trigger**: Creación de documento en `unified_messages`
-- **Descripción**: Envía notificaciones push cuando se crea un nuevo mensaje unificado
-- **Integración**: Llama al servicio de Google Apps Script para enviar notificaciones FCM
-
-### 2. `notifyOnNewMessage`
-- **Trigger**: Creación de documento en `messages` (compatibilidad)
-- **Descripción**: Maneja mensajes del sistema antiguo
-- **Integración**: Similar a la función unificada
-
-### 3. `notifyOnNewSolicitudVinculacion`
-- **Trigger**: Creación de documento en `solicitudes_vinculacion`
-- **Descripción**: Notifica a administradores cuando hay nuevas solicitudes
-- **Integración**: Envío directo de notificaciones FCM
-
-### 4. `notifyOnSolicitudVinculacionUpdated`
-- **Trigger**: Actualización de documento en `solicitudes_vinculacion`
-- **Descripción**: Notifica al familiar cuando su solicitud es procesada
-- **Integración**: FCM + Email vía Google Apps Script
 
 ## Configuración
 
