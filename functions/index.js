@@ -619,6 +619,144 @@ async function enviarEmailViaGAS(destinatario, nombre, estado, nombreAlumno, obs
   }
 }
 
+// Nueva función para eliminar usuarios completamente de Firebase Authentication
+exports.deleteUserByEmail = onDocumentCreated("user_deletion_requests/{requestId}", async (event) => {
+  const snap = event.data;
+  if (!snap) {
+    console.log("No data associated with the event");
+    return;
+  }
+  
+  const request = snap.data();
+  const requestId = event.params.requestId;
+  
+  console.log(`🗑️ Nueva solicitud de eliminación de usuario [${requestId}]`);
+  console.log(`📧 Email a eliminar: ${request.email}`);
+  
+  try {
+    // Validar que tenemos el email
+    if (!request.email) {
+      console.error("❌ No se proporcionó email en la solicitud");
+      // Actualizar el documento con el error
+      await admin.firestore().collection("user_deletion_requests").doc(requestId).update({
+        status: "ERROR",
+        error: "Email no proporcionado",
+        processedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+      return { success: false, error: "Email no proporcionado" };
+    }
+    
+    // Buscar el usuario por email
+    console.log(`🔍 Buscando usuario con email: ${request.email}`);
+    let userRecord;
+    
+    try {
+      userRecord = await admin.auth().getUserByEmail(request.email);
+      console.log(`✅ Usuario encontrado - UID: ${userRecord.uid}`);
+    } catch (error) {
+      if (error.code === 'auth/user-not-found') {
+        console.log(`⚠️ Usuario no encontrado en Firebase Auth: ${request.email}`);
+        // Actualizar el documento indicando que no se encontró
+        await admin.firestore().collection("user_deletion_requests").doc(requestId).update({
+          status: "USER_NOT_FOUND",
+          error: "Usuario no encontrado en Firebase Authentication",
+          processedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        return { success: false, error: "Usuario no encontrado" };
+      }
+      throw error;
+    }
+    
+    // Eliminar el usuario de Firebase Authentication
+    console.log(`🗑️ Eliminando usuario ${userRecord.uid} de Firebase Auth...`);
+    await admin.auth().deleteUser(userRecord.uid);
+    console.log(`✅ Usuario eliminado exitosamente de Firebase Auth`);
+    
+    // Actualizar el documento de solicitud como completado
+    await admin.firestore().collection("user_deletion_requests").doc(requestId).update({
+      status: "COMPLETED",
+      deletedUid: userRecord.uid,
+      processedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    
+    console.log(`✅ Proceso de eliminación completado para ${request.email}`);
+    
+    return { 
+      success: true, 
+      message: `Usuario ${request.email} eliminado completamente`,
+      uid: userRecord.uid 
+    };
+    
+  } catch (error) {
+    console.error(`❌ Error al eliminar usuario:`, error);
+    
+    // Actualizar el documento con el error
+    await admin.firestore().collection("user_deletion_requests").doc(requestId).update({
+      status: "ERROR",
+      error: error.message,
+      errorDetails: error.stack,
+      processedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    
+    return { success: false, error: error.message };
+  }
+});
+
+// Función HTTP para crear solicitudes de eliminación (opcional, para testing)
+exports.requestUserDeletion = require("firebase-functions").https.onRequest(async (req, res) => {
+  // Habilitar CORS
+  res.set('Access-Control-Allow-Origin', '*');
+  
+  if (req.method === 'OPTIONS') {
+    res.set('Access-Control-Allow-Methods', 'POST');
+    res.set('Access-Control-Allow-Headers', 'Content-Type');
+    res.set('Access-Control-Max-Age', '3600');
+    res.status(204).send('');
+    return;
+  }
+  
+  if (req.method !== 'POST') {
+    res.status(405).send('Method Not Allowed');
+    return;
+  }
+  
+  const { email, apiKey } = req.body;
+  
+  // Validación básica de API Key (puedes mejorar esto)
+  const EXPECTED_API_KEY = process.env.DELETE_USER_API_KEY || "tu-api-key-secreta";
+  if (apiKey !== EXPECTED_API_KEY) {
+    res.status(401).json({ success: false, error: 'API Key inválida' });
+    return;
+  }
+  
+  if (!email) {
+    res.status(400).json({ success: false, error: 'Email requerido' });
+    return;
+  }
+  
+  try {
+    // Crear documento de solicitud de eliminación
+    const docRef = await admin.firestore().collection("user_deletion_requests").add({
+      email: email,
+      status: "PENDING",
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      requestSource: "HTTP_API"
+    });
+    
+    console.log(`📝 Solicitud de eliminación creada: ${docRef.id} para ${email}`);
+    
+    res.status(200).json({ 
+      success: true, 
+      message: 'Solicitud de eliminación creada',
+      requestId: docRef.id 
+    });
+    
+  } catch (error) {
+    console.error('Error creando solicitud:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Función auxiliar para determinar el canal de notificación según el tipo de mensaje
 // Ya no se usa porque las notificaciones se envían a través del servicio GAS
 /*
