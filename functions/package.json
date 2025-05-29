@@ -1,0 +1,27 @@
+{
+  "name": "functions",
+  "description": "Firebase Cloud Functions para UmeEgunero",
+  "scripts": {
+    "lint": "eslint .",
+    "serve": "firebase emulators:start --only functions",
+    "shell": "firebase functions:shell",
+    "start": "npm run shell",
+    "deploy": "firebase deploy --only functions",
+    "logs": "firebase functions:log"
+  },
+  "engines": {
+    "node": "20"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "firebase-admin": "^11.8.0",
+    "firebase-functions": "^4.3.1",
+    "node-fetch": "^2.6.11"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.1",
+    "firebase-functions-test": "^3.1.0",
+    "globals": "^16.1.0"
+  },
+  "private": true
+}

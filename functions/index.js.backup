@@ -1,0 +1,388 @@
+// const functions = require("firebase-functions");
+const {onDocumentCreated} = require("firebase-functions/v2/firestore");
+// Importante: Necesitamos un módulo para hacer llamadas HTTP.
+// 'node-fetch' es común, pero las Cloud Functions v2 tienen fetch global (experimental?)
+// Para asegurar compatibilidad, usaremos node-fetch v2 (require).
+// ¡Asegúrate de añadirlo a package.json!
+const fetch = require("node-fetch");
+const admin = require("firebase-admin");
+
+admin.initializeApp();
+
+// --- ¡IMPORTANTE! REEMPLAZA ESTA URL ---
+// Pega aquí la URL de tu Google Apps Script Web App desplegada (la última que obtuviste)
+const APPS_SCRIPT_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbz-icUrMUrWAmvf8iuc6B8qd_WB5x0OORsnt3wfQ3XdzPl0nCml_L3MS3Lr6rLnQuxAdA/exec"; // <-- ¡VERIFICA QUE ES TU URL CORRECTA!
+// -----------------------------------------
+
+// Define la función que se exportará para mensajes unificados
+exports.notifyOnNewUnifiedMessage = onDocumentCreated("unified_messages/{messageId}", async (event) => {
+  // En v2, el snapshot está en event.data
+  const snap = event.data;
+  if (!snap) {
+    console.log("No data associated with the event");
+    return;
+  }
+  const newMessage = snap.data();
+  const messageId = event.params.messageId; // Obtener messageId de event.params
+
+  console.log(`Nuevo mensaje unificado detectado [${messageId}]. Datos:`, JSON.stringify(newMessage));
+
+  // Extraer datos necesarios
+  const senderId = newMessage.senderId || null;
+  const senderName = newMessage.senderName || "Usuario";
+  
+  // Dependiendo del tipo, asignaremos los destinatarios
+  let participantsIds = [];
+  
+  // Si es un mensaje personal, solo notificar al receptor
+  if (newMessage.receiverId && newMessage.receiverId !== "") {
+    participantsIds.push(newMessage.receiverId);
+  } 
+  // Si es un mensaje grupal, notificar a todos los receptores
+  else if (Array.isArray(newMessage.receiversIds) && newMessage.receiversIds.length > 0) {
+    participantsIds = newMessage.receiversIds;
+  } 
+  // Si no hay destinatarios explícitos, es posible que sea una notificación para todos
+  else {
+    // Aquí podrías implementar lógica para determinar a quién notificar
+    console.log("Mensaje sin destinatarios explícitos, no se enviarán notificaciones push");
+    return;
+  }
+  
+  const messageType = newMessage.type || "CHAT";
+  const messageContent = newMessage.content || "";
+  const messageTitle = newMessage.title || `Nuevo mensaje de ${senderName}`;
+  const conversationId = newMessage.conversationId || "";
+  const priority = newMessage.priority || "NORMAL";
+
+  // Excluir al remitente de las notificaciones
+  const recipientsIds = participantsIds.filter(id => id !== senderId);
+  
+  if (recipientsIds.length === 0) {
+    console.log("No hay destinatarios para notificar después de filtrar al remitente");
+    return;
+  }
+
+  // Obtener tokens FCM de los destinatarios
+  let tokensToSend = [];
+  try {
+    // Consulta para obtener los tokens de los usuarios destinatarios
+    const usersSnapshot = await admin.firestore().collection("usuarios")
+      .where(admin.firestore.FieldPath.documentId(), "in", recipientsIds)
+      .get();
+    
+    if (usersSnapshot.empty) {
+      console.log(`No se encontraron usuarios para los IDs: ${recipientsIds.join(", ")}`);
+      return;
+    }
+    
+    usersSnapshot.forEach(doc => {
+      const userData = doc.data();
+      const fcmTokens = userData.fcmTokens || {};
+      
+      // Añadir cada token del usuario
+      Object.values(fcmTokens).forEach(token => {
+        if (token && typeof token === "string") {
+          tokensToSend.push(token);
+        }
+      });
+    });
+    
+    if (tokensToSend.length === 0) {
+      console.log("No se encontraron tokens FCM para los destinatarios");
+      return;
+    }
+    
+    console.log(`Se encontraron ${tokensToSend.length} tokens para enviar notificaciones`);
+    
+    // Configurar prioridad según el tipo de mensaje
+    const notificationPriority = priority === "HIGH" || priority === "URGENT" ? "high" : "normal";
+    
+    // Datos para la notificación y deep linking
+    const notificationData = {
+      messageId: messageId,
+      messageType: messageType,
+      senderId: senderId,
+      senderName: senderName,
+      conversationId: conversationId,
+      priority: priority
+    };
+    
+    // Enviar mensajes de notificación
+    const batchSize = 500; // FCM tiene un límite de tokens por solicitud
+    const messagePromises = [];
+    
+    for (let i = 0; i < tokensToSend.length; i += batchSize) {
+      const batch = tokensToSend.slice(i, i + batchSize);
+      
+      const message = {
+        notification: {
+          title: messageTitle,
+          body: messageContent
+        },
+        data: notificationData,
+        android: {
+          priority: notificationPriority,
+          notification: {
+            channelId: getChannelIdForMessageType(messageType)
+          }
+        },
+        apns: {
+          payload: {
+            aps: {
+              alert: {
+                title: messageTitle,
+                body: messageContent
+              },
+              sound: notificationPriority === "high" ? "default" : null
+            }
+          }
+        },
+        tokens: batch
+      };
+      
+      messagePromises.push(admin.messaging().sendMulticast(message));
+    }
+    
+    const results = await Promise.all(messagePromises);
+    
+    let successCount = 0;
+    let failureCount = 0;
+    
+    results.forEach(result => {
+      successCount += result.successCount;
+      failureCount += result.failureCount;
+    });
+    
+    console.log(`Notificaciones enviadas: ${successCount} éxitos, ${failureCount} fallos`);
+    
+    return { success: true, successCount, failureCount };
+    
+  } catch (error) {
+    console.error("Error al enviar notificaciones:", error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Define la función para mensajes regulares (compatibilidad con versión anterior)
+exports.notifyOnNewMessage = onDocumentCreated("messages/{messageId}", async (event) => {
+  // En v2, el snapshot está en event.data
+  const snap = event.data;
+  if (!snap) {
+    console.log("No data associated with the event");
+    return;
+  }
+  const newMessage = snap.data();
+  const messageId = event.params.messageId; // Obtener messageId de event.params
+
+  console.log(`Nuevo mensaje detectado [${messageId}]. Datos:`, JSON.stringify(newMessage));
+
+  // Extraer datos necesarios para Apps Script
+  // ¡VALIDA que estos campos existen en tu documento newMessage!
+  const senderId = newMessage.senderId || null;
+  // *** CRUCIAL: Asegúrate de que tus mensajes en Firestore tienen este Array/Lista ***
+  const participantsIds = newMessage.participantsIds || [];
+  const messageType = newMessage.type || "UNKNOWN";
+  const messageContent = newMessage.content || "";
+  // Genera un título si no existe en el mensaje
+  const messageTitle = newMessage.title || (newMessage.senderName ? `Nuevo mensaje de ${newMessage.senderName}` : "Nuevo mensaje");
+
+  // Construir el payload para Apps Script
+  const payload = {
+    messageId: messageId,
+    senderId: senderId,
+    participantsIds: participantsIds,
+    messageType: messageType,
+    messageContent: messageContent,
+    messageTitle: messageTitle,
+  };
+
+  // Validar que tenemos IDs de participantes
+  if (!Array.isArray(participantsIds) || participantsIds.length === 0) {
+    console.log(`Mensaje ${messageId} sin campo 'participantsIds' (Array) válido. No se llamará a Apps Script.`);
+    return null;
+  }
+
+  // Validar que el mensaje tiene contenido
+  if (!messageContent) {
+    console.log(`Mensaje ${messageId} sin contenido. No se llamará a Apps Script.`);
+    return null;
+  }
+
+  try {
+    console.log(`Llamando a Apps Script con payload:`, JSON.stringify(payload));
+    
+    // Realizar la llamada HTTP a Google Apps Script Web App
+    const response = await fetch(APPS_SCRIPT_WEB_APP_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    const responseData = await response.json();
+    console.log(`Respuesta de Apps Script:`, JSON.stringify(responseData));
+    
+    return {success: true, data: responseData};
+  } catch (error) {
+    console.error(`Error al procesar mensaje ${messageId}:`, error);
+    return {success: false, error: error.message};
+  }
+});
+
+// Nueva función para manejar solicitudes de vinculación
+exports.notifyOnNewSolicitudVinculacion = onDocumentCreated("solicitudes_vinculacion/{solicitudId}", async (event) => {
+  const snap = event.data;
+  if (!snap) {
+    console.log("No data associated with the event");
+    return;
+  }
+  
+  const solicitud = snap.data();
+  const solicitudId = event.params.solicitudId;
+  
+  console.log(`Nueva solicitud de vinculación detectada [${solicitudId}]. Datos:`, JSON.stringify(solicitud));
+  
+  try {
+    // Obtener el centro ID de la solicitud
+    const centroId = solicitud.centroId;
+    if (!centroId) {
+      console.log("Solicitud sin centroId, no se pueden buscar administradores");
+      return;
+    }
+    
+    // Buscar administradores del centro
+    const adminSnapshot = await admin.firestore().collection("usuarios")
+      .where("perfiles", "array-contains", {
+        tipo: "ADMIN_CENTRO",
+        centroId: centroId,
+        verificado: true
+      })
+      .get();
+    
+    if (adminSnapshot.empty) {
+      console.log(`No se encontraron administradores para el centro ${centroId}`);
+      return;
+    }
+    
+    // Recopilar tokens FCM de todos los administradores
+    let tokensToSend = [];
+    
+    adminSnapshot.forEach(doc => {
+      const adminData = doc.data();
+      
+      // Buscar token FCM en preferencias.notificaciones.fcmToken
+      const preferencias = adminData.preferencias || {};
+      const notificaciones = preferencias.notificaciones || {};
+      const fcmToken = notificaciones.fcmToken;
+      
+      if (fcmToken && typeof fcmToken === "string") {
+        tokensToSend.push(fcmToken);
+        console.log(`Token FCM encontrado para admin ${doc.id}: ${fcmToken.substring(0, 20)}...`);
+      }
+      
+      // También buscar en fcmTokens (formato alternativo)
+      const fcmTokens = adminData.fcmTokens || {};
+      Object.values(fcmTokens).forEach(token => {
+        if (token && typeof token === "string" && !tokensToSend.includes(token)) {
+          tokensToSend.push(token);
+        }
+      });
+    });
+    
+    if (tokensToSend.length === 0) {
+      console.log("No se encontraron tokens FCM para los administradores del centro");
+      return;
+    }
+    
+    console.log(`Se encontraron ${tokensToSend.length} tokens de administradores para enviar notificaciones`);
+    
+    // Preparar el mensaje de notificación
+    const titulo = "Nueva solicitud de vinculación";
+    const mensaje = `El familiar ${solicitud.nombreFamiliar || "Un familiar"} ha solicitado vincularse con ${solicitud.alumnoNombre || "un alumno"}`;
+    
+    // Datos para la notificación
+    const notificationData = {
+      tipo: "solicitud_vinculacion",
+      solicitudId: solicitudId,
+      centroId: centroId,
+      click_action: "SOLICITUD_PENDIENTE"
+    };
+    
+    // Enviar notificaciones
+    const message = {
+      notification: {
+        title: titulo,
+        body: mensaje
+      },
+      data: notificationData,
+      android: {
+        priority: "high",
+        notification: {
+          channelId: "channel_solicitudes"
+        }
+      },
+      apns: {
+        payload: {
+          aps: {
+            alert: {
+              title: titulo,
+              body: mensaje
+            },
+            sound: "default"
+          }
+        }
+      },
+      tokens: tokensToSend
+    };
+    
+    const result = await admin.messaging().sendMulticast(message);
+    
+    console.log(`Notificaciones de solicitud enviadas: ${result.successCount} éxitos, ${result.failureCount} fallos`);
+    
+    // Limpiar tokens inválidos si los hay
+    if (result.failureCount > 0) {
+      const failedTokens = [];
+      result.responses.forEach((resp, idx) => {
+        if (!resp.success) {
+          failedTokens.push(tokensToSend[idx]);
+          console.log(`Token fallido: ${tokensToSend[idx].substring(0, 20)}... - Error: ${resp.error?.message}`);
+        }
+      });
+      
+      // Aquí podrías implementar lógica para limpiar tokens inválidos de Firestore
+    }
+    
+    return { success: true, successCount: result.successCount, failureCount: result.failureCount };
+    
+  } catch (error) {
+    console.error("Error al enviar notificaciones de solicitud de vinculación:", error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Función auxiliar para determinar el canal de notificación según el tipo de mensaje
+function getChannelIdForMessageType(messageType) {
+  switch (messageType) {
+    case "CHAT":
+      return "channel_chat";
+    case "ANNOUNCEMENT":
+      return "channel_announcements";
+    case "INCIDENT":
+      return "channel_incidencias";
+    case "ATTENDANCE":
+      return "channel_asistencia";
+    case "DAILY_RECORD":
+      return "channel_tareas";
+    case "NOTIFICATION":
+    case "SYSTEM":
+      return "channel_unified_communication";
+    default:
+      return "channel_general";
+  }
+} 
