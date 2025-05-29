@@ -9,6 +9,7 @@ Este directorio contiene las Cloud Functions utilizadas por la aplicación UmeEg
 - **notifyOnNewUnifiedMessage**: Envía notificaciones push cuando se crea un nuevo mensaje en la colección `unified_messages`.
   - Detecta si es un mensaje individual (receiverId) o grupal (receiversIds)
   - Filtra para no enviar notificaciones al emisor del mensaje
+  - Integración con servicio GAS de Messaging para personalización avanzada
 
 ### Solicitudes de vinculación
 
@@ -20,6 +21,7 @@ Este directorio contiene las Cloud Functions utilizadas por la aplicación UmeEg
 - **deleteUserByEmail**: Elimina completamente un usuario de Firebase Auth y actualiza el estado en Firestore.
   - Se activa cuando se crea un documento en la colección `user_deletion_requests`
   - Actualiza el documento con el estado del proceso (COMPLETED/ERROR)
+  - Utiliza el servicio GAS de User Management para operaciones críticas
 - **requestUserDeletion**: Endpoint HTTP para solicitar eliminación de usuarios (para pruebas).
 
 ### Custom Claims
@@ -40,6 +42,27 @@ Este directorio contiene las Cloud Functions utilizadas por la aplicación UmeEg
   - Solo puede ser llamada por administradores
   - Permite modificar manualmente los claims de un usuario
 
+## Integración con Google Apps Script
+
+La aplicación utiliza tres servicios GAS independientes que complementan las Cloud Functions:
+
+### 1. Email Service
+- Envío de correos transaccionales con plantillas HTML personalizadas
+- Notificaciones de registro y recuperación de contraseña
+- Informes y comunicados oficiales
+
+### 2. Messaging Service
+- Procesamiento avanzado de notificaciones push
+- Gestión y verificación de tokens FCM
+- Personalización de mensajes según tipo de usuario
+
+### 3. User Management Service
+- Eliminación segura de usuarios (Auth + Firestore)
+- Actualización de estado de usuarios
+- Operaciones administrativas privilegiadas
+
+Estos servicios funcionan como microservicios serverless, proporcionando funcionalidades avanzadas sin costos adicionales.
+
 ## Comandos Útiles
 
 ### Desplegar todas las funciones
@@ -54,7 +77,7 @@ firebase deploy --only functions
 firebase deploy --only functions:nombreDeLaFuncion
 ```
 
-### Desplegar solo las nuevas funciones de custom claims
+### Desplegar solo las funciones de custom claims
 
 ```bash
 firebase deploy --only functions:setClaimsOnNewUser,functions:syncClaimsOnUserUpdate,functions:syncUserCustomClaims,functions:setUserClaimsById
@@ -66,28 +89,16 @@ firebase deploy --only functions:setClaimsOnNewUser,functions:syncClaimsOnUserUp
 firebase functions:log
 ```
 
-## Notas importantes
-
-- Todas las funciones utilizan Firebase Admin SDK para acceder a Firestore y Authentication.
-- Las funciones relacionadas con notificaciones requieren tokens FCM válidos almacenados en los documentos de usuario.
-- Las funciones para custom claims son esenciales para que las reglas de seguridad de Firestore funcionen correctamente.
-
-## Descripción
-
-Las Cloud Functions manejan la lógica del servidor, incluyendo:
-- Envío de notificaciones push cuando se crean nuevos mensajes
-- Notificaciones para solicitudes de vinculación
-- Integración con Google Apps Script para servicios externos
-
 ## Estructura
 
 ```
 cloud-functions/
 ├── functions/
-│   ├── index.js          # Funciones principales
-│   ├── package.json      # Dependencias
-│   └── .gitignore       # Archivos ignorados
-└── README.md            # Este archivo
+│   ├── index.js                # Funciones principales
+│   ├── setUserCustomClaims.js  # Funciones de custom claims
+│   ├── package.json            # Dependencias
+│   └── .gitignore              # Archivos ignorados
+└── README.md                   # Este archivo
 ```
 
 ## Configuración
@@ -95,17 +106,15 @@ cloud-functions/
 Las funciones utilizan las siguientes URLs de servicios externos (Google Apps Script):
 
 - **Email Service**: Para envío de emails transaccionales
+  - URL: `https://script.google.com/macros/s/AKfycbyfTE5SZDmPymn-KfkrWh-_T3thgxnNbSdLr93lsXMcYgMd_-xmIRRaA3JZb3xvPDZgCw/exec`
+
 - **Messaging Service**: Para procesamiento de notificaciones push
+  - URL: `https://script.google.com/macros/s/AKfycbze3MmQnykWCV_ymsZgnICiC1wFIZG37-8Pr66ZbJS9X87LiL10wC3JJYVu1MVzsjxP/exec`
+
+- **User Management Service**: Para operaciones de gestión de usuarios
+  - URL: `https://script.google.com/macros/s/AKfycbyLX_6MkLXYoZTzAWbrZ-NMRDlGNx6DuWUDXDJ3MxEiKRPTqHVGCRmIw_NQhiEO7eT5/exec`
 
 Estas URLs están configuradas directamente en el código y deben actualizarse si los servicios GAS cambian.
-
-## Despliegue
-
-```bash
-cd functions
-npm install
-firebase deploy --only functions
-```
 
 ## Desarrollo Local
 
@@ -119,14 +128,16 @@ firebase emulators:start --only functions
 
 ## Notas Importantes
 
-- Las funciones dependen de servicios externos de Google Apps Script
-- Los tokens FCM se obtienen de los documentos de usuario en Firestore
+- Las funciones requieren Node.js 16+ (configurado en package.json)
+- Las funciones para custom claims son esenciales para que las reglas de seguridad de Firestore funcionen correctamente
+- Los alumnos nunca tendrán firebaseUid ya que no inician sesión en la aplicación
+- Todos los tokens FCM se obtienen de los documentos de usuario en Firestore
 - Las notificaciones incluyen datos específicos para la navegación en la app
 
 ## Mantenimiento
 
 Para actualizar las funciones:
-1. Modificar el código en `functions/index.js`
+1. Modificar el código en `functions/index.js` o `functions/setUserCustomClaims.js`
 2. Probar localmente con emuladores
 3. Desplegar con `firebase deploy --only functions`
 4. Verificar en la consola de Firebase que las funciones estén activas 
