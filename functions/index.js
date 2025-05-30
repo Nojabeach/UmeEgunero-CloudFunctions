@@ -21,7 +21,7 @@ admin.initializeApp();
 // URLs de los servicios Google Apps Script desplegados
 const APPS_SCRIPT_EMAIL_URL = "https://script.google.com/macros/s/AKfycbyWjyQ_-J5YeKxgGMVsFOFCuQMUqFKsr5zRCONGNydiFrqdx6Gwd6YPosdx1dXhu8H4QA/exec"; // Servicio de email
 // const APPS_SCRIPT_DELETE_USER_URL = "https://script.google.com/macros/s/AKfycbyh6ESPVYm-EyBM3z4DXgNW2yKNFSTzpN4-fR6b6CwFvSZMxBAtUJVk2Djy5qb_7qtk/exec"; // Servicio de eliminación de usuarios (no usado en Cloud Functions)
-const APPS_SCRIPT_MESSAGING_URL = "https://script.google.com/macros/s/AKfycbyDdHI1lqKdzo8VTPrUIcuXvjRlBI_-7FXvVcr6Pi4wOBFDovyRrNd6tUEG0oF6o0LddA/exec"; // Servicio de mensajería/notificaciones
+const APPS_SCRIPT_MESSAGING_URL = "https://script.google.com/macros/s/AKfycbzqLvvnb_Xr4JNwUa9BWzCLLLJTEPGow6aFhO9I3IfPvGsS3YMxZZQYJYuMUJr-YGKJ/exec"; // Servicio de mensajería/notificaciones actualizado
 
 // Define la función que se exportará para mensajes unificados
 exports.notifyOnNewUnifiedMessage = onDocumentCreated("unified_messages/{messageId}", async (event) => {
