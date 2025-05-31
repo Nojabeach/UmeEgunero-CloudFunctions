@@ -427,6 +427,7 @@ exports.notifyOnSolicitudVinculacionUpdated = onDocumentUpdated("solicitudes_vin
 // IMPORTANTE: Esta función debe enviar ÚNICAMENTE EMAILS, NO notificaciones push
 // Las notificaciones push las maneja exclusivamente Cloud Functions para evitar duplicados
 // ESTADO: Deshabilitada para solicitudes de vinculación, disponible para otros tipos de emails
+// eslint-disable-next-line no-unused-vars
 async function enviarEmailViaGAS(destinatario, nombre, estado, nombreAlumno, observaciones = "") {
   try {
     console.log(`📧 Enviando email vía GAS: ${destinatario}, Estado: ${estado}, Alumno: ${nombreAlumno}`);
