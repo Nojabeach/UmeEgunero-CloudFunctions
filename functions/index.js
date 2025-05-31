@@ -241,22 +241,32 @@ exports.notifyOnSolicitudVinculacionUpdated = onDocumentUpdated("solicitudes_vin
       const familiarDoc = await admin.firestore().collection("usuarios").doc(familiarId).get();
       if (!familiarDoc.exists) {
         console.log(`❌ No se encontró el familiar con ID: ${familiarId} - familiar aún no ha iniciado sesión`);
-        console.log(`📧 Enviando email vía Google Apps Script usando datos de la solicitud`);
+        console.log(`📧 NOTA: GAS deshabilitado para solicitudes - Cloud Functions maneja notificaciones push`);
         
-        // Enviar email usando los datos de la solicitud
-        await enviarEmailViaGAS(
-          afterData.familiarEmail || "email@ejemplo.com", // Email desde la solicitud
-          afterData.familiarNombre || "Familiar", // Nombre desde la solicitud
-          afterData.estado,
-          afterData.alumnoNombre || "el alumno",
-          afterData.observaciones || ""
-        );
+        // GAS DESHABILITADO PARA SOLICITUDES: Solo Cloud Functions envía notificaciones push
+        // El envío de emails para solicitudes se omite para evitar duplicados de notificaciones
+        // NOTA: GAS sigue disponible para otros tipos de emails (no relacionados con solicitudes)
+        /*
+        try {
+          await enviarEmailViaGAS(
+            afterData.familiarEmail || "email@ejemplo.com",
+            afterData.familiarNombre || "Familiar",
+            afterData.estado,
+            afterData.alumnoNombre || "el alumno",
+            afterData.observaciones || ""
+          );
+          console.log(`📧 Email enviado vía Google Apps Script a ${afterData.familiarEmail}`);
+        } catch (emailError) {
+          console.error("Error enviando email vía GAS:", emailError);
+          // No interrumpimos el flujo si falla el email
+        }
+        */
         
         return { 
           success: true, 
-          method: "email_sent_via_gas", 
+          method: "cloud_functions_only", 
           familiarId: familiarId,
-          reason: "Familiar no ha iniciado sesión - email enviado vía GAS"
+          reason: "Familiar no ha iniciado sesión - solo notificaciones push de Cloud Functions"
         };
       }
       
@@ -300,8 +310,10 @@ exports.notifyOnSolicitudVinculacionUpdated = onDocumentUpdated("solicitudes_vin
       
       console.log(`Enviando notificación: "${titulo}" - "${mensaje}"`);
       
-      // ENVIAR EMAIL ÚNICAMENTE vía Google Apps Script (no push notifications)
-      // Las notificaciones push las maneja exclusivamente Cloud Functions
+      // GAS DESHABILITADO PARA SOLICITUDES: Solo Cloud Functions envía notificaciones push
+      // El envío de emails para solicitudes se omite para evitar duplicados de notificaciones
+      // NOTA: GAS sigue disponible para otros tipos de emails (no relacionados con solicitudes)
+      /*
       try {
         await enviarEmailViaGAS(
           familiarData.email || afterData.familiarEmail || "email@ejemplo.com",
@@ -315,6 +327,8 @@ exports.notifyOnSolicitudVinculacionUpdated = onDocumentUpdated("solicitudes_vin
         console.error("Error enviando email vía GAS:", emailError);
         // No interrumpimos el flujo si falla el email
       }
+      */
+      console.log(`📧 NOTA: GAS deshabilitado para solicitudes - Cloud Functions maneja notificaciones push`);
       
       // Enviar notificaciones push solo si hay tokens FCM
       if (tokensToSend.length > 0) {
@@ -412,10 +426,11 @@ exports.notifyOnSolicitudVinculacionUpdated = onDocumentUpdated("solicitudes_vin
 // Función auxiliar para enviar emails vía Google Apps Script
 // IMPORTANTE: Esta función debe enviar ÚNICAMENTE EMAILS, NO notificaciones push
 // Las notificaciones push las maneja exclusivamente Cloud Functions para evitar duplicados
+// ESTADO: Deshabilitada para solicitudes de vinculación, disponible para otros tipos de emails
 async function enviarEmailViaGAS(destinatario, nombre, estado, nombreAlumno, observaciones = "") {
   try {
     console.log(`📧 Enviando email vía GAS: ${destinatario}, Estado: ${estado}, Alumno: ${nombreAlumno}`);
-    console.log(`⚠️  NOTA: GAS debe configurarse para enviar SOLO emails, NO push notifications`);
+    console.log(`⚠️  NOTA: GAS configurado para enviar SOLO emails, NO push notifications`);
     
     const esAprobada = estado === "APROBADA";
     const asunto = esAprobada 
