@@ -241,32 +241,22 @@ exports.notifyOnSolicitudVinculacionUpdated = onDocumentUpdated("solicitudes_vin
       const familiarDoc = await admin.firestore().collection("usuarios").doc(familiarId).get();
       if (!familiarDoc.exists) {
         console.log(`❌ No se encontró el familiar con ID: ${familiarId} - familiar aún no ha iniciado sesión`);
-        console.log(`📧 NOTA: GAS deshabilitado para solicitudes - Cloud Functions maneja notificaciones push`);
+        console.log(`📧 Enviando email vía Google Apps Script usando datos de la solicitud`);
         
-        // GAS DESHABILITADO PARA SOLICITUDES: Solo Cloud Functions envía notificaciones push
-        // El envío de emails para solicitudes se omite para evitar duplicados de notificaciones
-        // NOTA: GAS sigue disponible para otros tipos de emails (no relacionados con solicitudes)
-        /*
-        try {
-          await enviarEmailViaGAS(
-            afterData.familiarEmail || "email@ejemplo.com",
-            afterData.familiarNombre || "Familiar",
-            afterData.estado,
-            afterData.alumnoNombre || "el alumno",
-            afterData.observaciones || ""
-          );
-          console.log(`📧 Email enviado vía Google Apps Script a ${afterData.familiarEmail}`);
-        } catch (emailError) {
-          console.error("Error enviando email vía GAS:", emailError);
-          // No interrumpimos el flujo si falla el email
-        }
-        */
+        // Enviar email usando los datos de la solicitud
+        await enviarEmailViaGAS(
+          afterData.familiarEmail || "email@ejemplo.com", // Email desde la solicitud
+          afterData.familiarNombre || "Familiar", // Nombre desde la solicitud
+          afterData.estado,
+          afterData.alumnoNombre || "el alumno",
+          afterData.observaciones || ""
+        );
         
         return { 
           success: true, 
-          method: "cloud_functions_only", 
+          method: "email_only", 
           familiarId: familiarId,
-          reason: "Familiar no ha iniciado sesión - solo notificaciones push de Cloud Functions"
+          reason: "Familiar no ha iniciado sesión - email enviado via GAS"
         };
       }
       
@@ -310,10 +300,8 @@ exports.notifyOnSolicitudVinculacionUpdated = onDocumentUpdated("solicitudes_vin
       
       console.log(`Enviando notificación: "${titulo}" - "${mensaje}"`);
       
-      // GAS DESHABILITADO PARA SOLICITUDES: Solo Cloud Functions envía notificaciones push
-      // El envío de emails para solicitudes se omite para evitar duplicados de notificaciones
-      // NOTA: GAS sigue disponible para otros tipos de emails (no relacionados con solicitudes)
-      /*
+      // ENVIAR EMAIL vía Google Apps Script (además de las notificaciones push)
+      // Los emails son importantes para las aprobaciones/rechazos de solicitudes
       try {
         await enviarEmailViaGAS(
           familiarData.email || afterData.familiarEmail || "email@ejemplo.com",
@@ -327,8 +315,6 @@ exports.notifyOnSolicitudVinculacionUpdated = onDocumentUpdated("solicitudes_vin
         console.error("Error enviando email vía GAS:", emailError);
         // No interrumpimos el flujo si falla el email
       }
-      */
-      console.log(`📧 NOTA: GAS deshabilitado para solicitudes - Cloud Functions maneja notificaciones push`);
       
       // Enviar notificaciones push solo si hay tokens FCM
       if (tokensToSend.length > 0) {
@@ -426,7 +412,7 @@ exports.notifyOnSolicitudVinculacionUpdated = onDocumentUpdated("solicitudes_vin
 // Función auxiliar para enviar emails vía Google Apps Script
 // IMPORTANTE: Esta función debe enviar ÚNICAMENTE EMAILS, NO notificaciones push
 // Las notificaciones push las maneja exclusivamente Cloud Functions para evitar duplicados
-// ESTADO: Deshabilitada para solicitudes de vinculación, disponible para otros tipos de emails
+// ESTADO: Habilitada para enviar emails de aprobación/rechazo de solicitudes de vinculación
 // eslint-disable-next-line no-unused-vars
 async function enviarEmailViaGAS(destinatario, nombre, estado, nombreAlumno, observaciones = "") {
   try {
