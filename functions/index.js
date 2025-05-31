@@ -1017,9 +1017,33 @@ exports.sendActivityRecordNotification = onDocumentCreated("registrosActividad/{
         const alumnoId = registroData.alumnoId || "";
         const alumnoNombre = registroData.alumnoNombre || "Alumno";
         const profesorNombre = registroData.profesorNombre || "Profesor";
-        const fecha = registroData.fecha ? new Date(registroData.fecha.seconds * 1000) : new Date();
         
-        console.log(`📬 Registro actividad: Alumno=${alumnoNombre}, ID=${alumnoId}, Profesor=${profesorNombre}`);
+        // Manejar la fecha correctamente considerando la zona horaria
+        let fecha;
+        if (registroData.fecha && registroData.fecha.seconds) {
+            // Crear la fecha desde el timestamp de Firestore
+            fecha = new Date(registroData.fecha.seconds * 1000);
+            
+            // Si la hora es 00:00:00, es probable que sea la fecha sin hora específica
+            // En este caso, usamos la fecha tal cual sin ajustes de zona horaria
+            const hours = fecha.getUTCHours();
+            const minutes = fecha.getUTCMinutes();
+            const seconds = fecha.getUTCSeconds();
+            
+            if (hours === 0 && minutes === 0 && seconds === 0) {
+                // Es medianoche UTC, usar la fecha tal cual
+                console.log(`📅 Fecha del registro (medianoche UTC): ${fecha.toISOString()}`);
+            } else if (hours === 22 || hours === 23) {
+                // Si es 22:00 o 23:00 UTC, podría ser medianoche en España (UTC+1/+2)
+                // Ajustar un día adelante para mostrar la fecha correcta
+                fecha.setDate(fecha.getDate() + 1);
+                console.log(`📅 Fecha ajustada (+1 día) por zona horaria: ${fecha.toISOString()}`);
+            }
+        } else {
+            fecha = new Date();
+        }
+        
+        console.log(`📬 Registro actividad: Alumno=${alumnoNombre}, ID=${alumnoId}, Profesor=${profesorNombre}, Fecha=${fecha.toISOString()}`);
         
         // Si no hay ID de alumno, no podemos continuar
         if (!alumnoId) {
@@ -1131,7 +1155,8 @@ exports.sendActivityRecordNotification = onDocumentCreated("registrosActividad/{
         const fechaFormateada = fecha.toLocaleDateString("es-ES", { 
             day: "2-digit", 
             month: "2-digit", 
-            year: "numeric" 
+            year: "numeric",
+            timeZone: "Europe/Madrid" // Especificar explícitamente la zona horaria española
         });
         
         // Preparar el mensaje de notificación
