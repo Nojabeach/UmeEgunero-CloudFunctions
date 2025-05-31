@@ -1028,9 +1028,8 @@ exports.sendActivityRecordNotification = onDocumentCreated("registrosActividad/{
         }
         
         // Buscar los familiares vinculados al alumno
-        const vinculacionesSnapshot = await admin.firestore().collection("vinculaciones")
+        const vinculacionesSnapshot = await admin.firestore().collection("vinculaciones_familiar_alumno")
             .where("alumnoId", "==", alumnoId)
-            .where("estado", "==", "ACTIVA")
             .get();
         
         if (vinculacionesSnapshot.empty) {
@@ -1052,19 +1051,51 @@ exports.sendActivityRecordNotification = onDocumentCreated("registrosActividad/{
             return null;
         }
         
-        console.log(`📤 Enviando notificación a ${familiaresIds.length} familiares`);
+        console.log(`📤 Enviando notificación a ${familiaresIds.length} familiares: ${familiaresIds.join(", ")}`);
         
         // Obtener tokens FCM de los familiares
         let tokensToSend = [];
+        let familiaresToNotify = [];
         
-        // Consultar documentos de usuarios para los familiares
-        const familiaresSnapshot = await admin.firestore().collection("usuarios")
-            .where(admin.firestore.FieldPath.documentId(), "in", familiaresIds)
-            .get();
-        
-        familiaresSnapshot.forEach(doc => {
-            const familiarData = doc.data();
+        // Primero intentar buscar por ID de documento (Firebase UID)
+        try {
+            const familiaresSnapshot = await admin.firestore().collection("usuarios")
+                .where(admin.firestore.FieldPath.documentId(), "in", familiaresIds)
+                .get();
             
+            familiaresSnapshot.forEach(doc => {
+                const familiarData = doc.data();
+                familiaresToNotify.push({ id: doc.id, data: familiarData });
+            });
+        } catch (e) {
+            console.log("No se encontraron usuarios por ID de documento, intentando por DNI...");
+        }
+        
+        // Si no encontramos usuarios por ID, buscar por DNI
+        if (familiaresToNotify.length === 0) {
+            console.log("Buscando familiares por DNI...");
+            for (const familiarId of familiaresIds) {
+                try {
+                    const usuarioSnapshot = await admin.firestore().collection("usuarios")
+                        .where("dni", "==", familiarId)
+                        .limit(1)
+                        .get();
+                    
+                    if (!usuarioSnapshot.empty) {
+                        const doc = usuarioSnapshot.docs[0];
+                        familiaresToNotify.push({ id: doc.id, data: doc.data() });
+                        console.log(`Familiar encontrado por DNI ${familiarId}: ${doc.id}`);
+                    } else {
+                        console.log(`No se encontró usuario con DNI: ${familiarId}`);
+                    }
+                } catch (e) {
+                    console.error(`Error buscando usuario por DNI ${familiarId}:`, e);
+                }
+            }
+        }
+        
+        // Extraer tokens FCM de los familiares encontrados
+        familiaresToNotify.forEach(({ id, data: familiarData }) => {
             // Buscar en preferencias.notificaciones.fcmToken
             const preferencias = familiarData.preferencias || {};
             const notificaciones = preferencias.notificaciones || {};
@@ -1072,7 +1103,7 @@ exports.sendActivityRecordNotification = onDocumentCreated("registrosActividad/{
             
             if (fcmToken && typeof fcmToken === "string") {
                 tokensToSend.push(fcmToken);
-                console.log(`Token FCM encontrado en preferencias para familiar ${doc.id}: ${fcmToken.substring(0, 20)}...`);
+                console.log(`Token FCM encontrado en preferencias para familiar ${id}: ${fcmToken.substring(0, 20)}...`);
             }
             
             // También buscar en fcmTokens (formato alternativo)
@@ -1080,9 +1111,15 @@ exports.sendActivityRecordNotification = onDocumentCreated("registrosActividad/{
             Object.values(fcmTokens).forEach(token => {
                 if (token && typeof token === "string" && !tokensToSend.includes(token)) {
                     tokensToSend.push(token);
-                    console.log(`Token FCM adicional encontrado para familiar ${doc.id}: ${token.substring(0, 20)}...`);
+                    console.log(`Token FCM adicional encontrado para familiar ${id}: ${token.substring(0, 20)}...`);
                 }
             });
+            
+            // Buscar en fcmToken a nivel raíz
+            if (familiarData.fcmToken && typeof familiarData.fcmToken === "string" && !tokensToSend.includes(familiarData.fcmToken)) {
+                tokensToSend.push(familiarData.fcmToken);
+                console.log(`Token FCM encontrado a nivel raíz para familiar ${id}: ${familiarData.fcmToken.substring(0, 20)}...`);
+            }
         });
         
         if (tokensToSend.length === 0) {
