@@ -1,4 +1,4 @@
-// const functions = require("firebase-functions");
+const functions = require("firebase-functions");
 const {onDocumentCreated, onDocumentUpdated} = require("firebase-functions/v2/firestore");
 // Importante: Necesitamos un módulo para hacer llamadas HTTP.
 // 'node-fetch' es común, pero las Cloud Functions v2 tienen fetch global (experimental?)
@@ -6,6 +6,7 @@ const {onDocumentCreated, onDocumentUpdated} = require("firebase-functions/v2/fi
 // ¡Asegúrate de añadirlo a package.json!
 const fetch = require("node-fetch");
 const admin = require("firebase-admin");
+const axios = require("axios");
 
 // Importar funciones de autenticación personalizada
 // Nota: estas funciones usan Firebase Functions v1, no v2
@@ -21,7 +22,7 @@ admin.initializeApp();
 // URLs de los servicios Google Apps Script desplegados
 const APPS_SCRIPT_EMAIL_URL = "https://script.google.com/macros/s/AKfycbyWjyQ_-J5YeKxgGMVsFOFCuQMUqFKsr5zRCONGNydiFrqdx6Gwd6YPosdx1dXhu8H4QA/exec"; // Servicio de email
 // const APPS_SCRIPT_DELETE_USER_URL = "https://script.google.com/macros/s/AKfycbyh6ESPVYm-EyBM3z4DXgNW2yKNFSTzpN4-fR6b6CwFvSZMxBAtUJVk2Djy5qb_7qtk/exec"; // Servicio de eliminación de usuarios (no usado en Cloud Functions)
-const APPS_SCRIPT_MESSAGING_URL = "https://script.google.com/macros/s/AKfycbzqLvvnb_Xr4JNwUa9BWzCLLLJTEPGow6aFhO9I3IfPvGsS3YMxZZQYJYuMUJr-YGKJ/exec"; // Servicio de mensajería/notificaciones actualizado
+const APPS_SCRIPT_MESSAGING_URL = "https://script.google.com/macros/s/AKfycbz-icUrMUrWAmvf8iuc6B8qd_WB5x0OORsnt3wfQ3XdzPl0nCml_L3MS3Lr6rLnQuxAdA/exec"; // Servicio de mensajería/notificaciones actualizado
 
 // Define la función que se exportará para mensajes unificados
 exports.notifyOnNewUnifiedMessage = onDocumentCreated("unified_messages/{messageId}", async (event) => {
@@ -905,4 +906,392 @@ function getChannelIdForMessageType(messageType) {
 exports.syncUserCustomClaims = syncUserCustomClaims;
 exports.setUserClaimsById = setUserClaimsById;
 exports.syncClaimsOnUserUpdate = syncClaimsOnUserUpdate;
-exports.setClaimsOnNewUser = setClaimsOnNewUser; 
+exports.setClaimsOnNewUser = setClaimsOnNewUser;
+
+// Función para enviar notificaciones utilizando FCM cuando se crea un mensaje unificado
+exports.sendMessageNotification = functions.firestore.document("unified_messages/{messageId}")
+    .onCreate(async (snapshot, context) => {
+        const messageData = snapshot.data();
+        const messageId = context.params.messageId;
+        
+        console.log(`⚡ Procesando notificación para mensaje: ${messageId}`);
+        
+        try {
+            // Validar que tengamos los datos necesarios
+            if (!messageData) {
+                console.error("❌ No hay datos en el mensaje");
+                return null;
+            }
+            
+            // Extraer datos relevantes
+            const senderId = messageData.senderId || "";
+            const receiversIds = messageData.receiversIds || [];
+            const receiverId = messageData.receiverId || "";
+            const messageType = messageData.type || "SYSTEM";
+            const messageContent = messageData.content || "Nuevo mensaje";
+            const messageTitle = messageData.title || "Ume Egunero";
+            const conversationId = messageData.conversationId || "";
+            
+            console.log(`📬 Mensaje: Tipo=${messageType}, De=${senderId}, Para=${receiverId || receiversIds.join(",")}`);
+            
+            // Lista de receptores (combinar receiverId y receiversIds)
+            let recipients = [];
+            if (receiverId && receiverId !== "") {
+                recipients.push(receiverId);
+            }
+            if (receiversIds && receiversIds.length > 0) {
+                // Añadir sin duplicados
+                for (const id of receiversIds) {
+                    if (!recipients.includes(id)) {
+                        recipients.push(id);
+                    }
+                }
+            }
+            
+            // Remover al remitente de los destinatarios (no queremos enviarle notificación a él mismo)
+            recipients = recipients.filter(id => id !== senderId);
+            
+            if (recipients.length === 0) {
+                console.log("⚠️ No hay destinatarios para notificar");
+                return null;
+            }
+            
+            console.log(`📤 Enviando notificación a ${recipients.length} destinatarios`);
+            
+            // Obtener datos del remitente para incluir en la notificación
+            let senderName = "Usuario";
+            let senderRole = "";
+            try {
+                const senderDoc = await admin.firestore().collection("usuarios").doc(senderId).get();
+                if (senderDoc.exists) {
+                    const senderData = senderDoc.data();
+                    senderName = `${senderData.nombre || ""} ${senderData.apellidos || ""}`.trim();
+                    if (senderData.perfiles && senderData.perfiles.length > 0) {
+                        senderRole = senderData.perfiles[0].tipo || "";
+                    }
+                }
+            } catch (error) {
+                console.error("❌ Error al obtener datos del remitente:", error);
+                // Continuamos con el nombre por defecto
+            }
+            
+            // Preparar mensaje para el servicio GAS
+            const notificationData = {
+                messageId: messageId,
+                senderId: senderId,
+                participantsIds: recipients,
+                messageType: messageType,
+                messageContent: messageContent,
+                messageTitle: `${messageTitle} de ${senderName}`,
+                conversationId: conversationId,
+                senderName: senderName,
+                senderRole: senderRole
+            };
+            
+            console.log("📦 Datos de notificación preparados:", notificationData);
+            
+            // Intentar enviar la notificación a través de GAS
+            try {
+                const response = await axios.post(APPS_SCRIPT_MESSAGING_URL, notificationData);
+                console.log("✅ Respuesta del servicio GAS:", response.data);
+                return { success: true, message: "Notificación enviada correctamente" };
+            } catch (error) {
+                console.error("❌ Error al enviar notificación a GAS:", error.message);
+                
+                // Si falla GAS, intentar enviar directamente con FCM como plan B
+                console.log("⚠️ Intentando envío directo con FCM como fallback");
+                
+                // Obtener tokens FCM para cada destinatario
+                const fcmTokens = [];
+                for (const recipientId of recipients) {
+                    try {
+                        const userDoc = await admin.firestore().collection("usuarios").doc(recipientId).get();
+                        if (userDoc.exists) {
+                            const userData = userDoc.data();
+                            
+                            // Buscar el token FCM en varias ubicaciones posibles
+                            let token = null;
+                            
+                            // 1. Estructura preferencias.notificaciones.fcmToken
+                            if (userData.preferencias && 
+                                userData.preferencias.notificaciones && 
+                                userData.preferencias.notificaciones.fcmToken) {
+                                token = userData.preferencias.notificaciones.fcmToken;
+                            }
+                            
+                            // 2. Campo fcmToken a nivel raíz
+                            if (!token && userData.fcmToken) {
+                                token = userData.fcmToken;
+                            }
+                            
+                            // 3. Campo deviceId como último recurso
+                            if (!token && userData.preferencias && 
+                                userData.preferencias.notificaciones && 
+                                userData.preferencias.notificaciones.deviceId) {
+                                const deviceId = userData.preferencias.notificaciones.deviceId;
+                                console.log(`⚠️ Usando deviceId como token para usuario ${recipientId}: ${deviceId}`);
+                                token = deviceId;
+                            }
+                            
+                            if (token) {
+                                fcmTokens.push(token);
+                                console.log(`✅ Token encontrado para usuario ${recipientId}: ${token.substring(0, 10)}...`);
+                            } else {
+                                console.warn(`⚠️ No se encontró token FCM para usuario ${recipientId}`);
+                            }
+                        } else {
+                            console.warn(`⚠️ Usuario no encontrado: ${recipientId}`);
+                        }
+                    } catch (userError) {
+                        console.error(`❌ Error al obtener token para usuario ${recipientId}:`, userError);
+                    }
+                }
+                
+                if (fcmTokens.length === 0) {
+                    console.error("❌ No se encontraron tokens FCM para ningún destinatario");
+                    return { success: false, message: "No se pudieron obtener tokens FCM" };
+                }
+                
+                // Preparar mensaje FCM
+                const fcmMessage = {
+                    notification: {
+                        title: `${messageTitle} de ${senderName}`,
+                        body: messageContent
+                    },
+                    data: {
+                        messageId: messageId,
+                        conversationId: conversationId,
+                        messageType: messageType,
+                        senderId: senderId,
+                        senderName: senderName,
+                        senderRole: senderRole,
+                        title: `${messageTitle} de ${senderName}`,
+                        body: messageContent
+                    }
+                };
+                
+                // Enviar a cada token
+                const fcmResults = [];
+                for (const token of fcmTokens) {
+                    try {
+                        const message = {
+                            ...fcmMessage,
+                            token: token
+                        };
+                        
+                        await admin.messaging().send(message);
+                        fcmResults.push({ token: token.substring(0, 10) + "...", success: true });
+                        console.log(`✅ Notificación FCM enviada a token ${token.substring(0, 10)}...`);
+                    } catch (fcmError) {
+                        console.error(`❌ Error al enviar FCM a token ${token.substring(0, 10)}...:`, fcmError.message);
+                        fcmResults.push({ token: token.substring(0, 10) + "...", success: false, error: fcmError.message });
+                    }
+                }
+                
+                console.log("📊 Resultados FCM directo:", fcmResults);
+                return { 
+                    success: fcmResults.some(r => r.success), 
+                    message: "Fallback FCM utilizado",
+                    results: fcmResults
+                };
+            }
+        } catch (error) {
+            console.error("❌ Error general en función sendMessageNotification:", error);
+            return { success: false, error: error.message };
+        }
+    }); 
+
+// Función para enviar notificaciones cuando se crea un nuevo registro de actividad
+exports.sendActivityRecordNotification = onDocumentCreated("registros_actividad/{registroId}", async (event) => {
+    const snap = event.data;
+    if (!snap) {
+        console.log("No hay datos asociados al evento de registro de actividad");
+        return;
+    }
+    
+    const registroData = snap.data();
+    const registroId = event.params.registroId;
+    
+    console.log(`⚡ Procesando notificación para registro de actividad: ${registroId}`);
+    
+    try {
+        // Validar que tengamos los datos necesarios
+        if (!registroData) {
+            console.error("❌ No hay datos en el registro de actividad");
+            return null;
+        }
+        
+        // Extraer datos relevantes
+        const alumnoId = registroData.alumnoId || "";
+        const alumnoNombre = registroData.alumnoNombre || "Alumno";
+        const profesorNombre = registroData.profesorNombre || "Profesor";
+        const fecha = registroData.fecha ? new Date(registroData.fecha.seconds * 1000) : new Date();
+        
+        console.log(`📬 Registro actividad: Alumno=${alumnoNombre}, ID=${alumnoId}, Profesor=${profesorNombre}`);
+        
+        // Si no hay ID de alumno, no podemos continuar
+        if (!alumnoId) {
+            console.error("❌ El registro no tiene ID de alumno");
+            return null;
+        }
+        
+        // Buscar los familiares vinculados al alumno
+        const vinculacionesSnapshot = await admin.firestore().collection("vinculaciones")
+            .where("alumnoId", "==", alumnoId)
+            .where("estado", "==", "ACTIVA")
+            .get();
+        
+        if (vinculacionesSnapshot.empty) {
+            console.log(`⚠️ No hay familiares vinculados al alumno ${alumnoId}`);
+            return null;
+        }
+        
+        // Extraer IDs de los familiares
+        const familiaresIds = [];
+        vinculacionesSnapshot.forEach(doc => {
+            const vinculacion = doc.data();
+            if (vinculacion.familiarId) {
+                familiaresIds.push(vinculacion.familiarId);
+            }
+        });
+        
+        if (familiaresIds.length === 0) {
+            console.log("⚠️ No se encontraron IDs de familiares en las vinculaciones");
+            return null;
+        }
+        
+        console.log(`📤 Enviando notificación a ${familiaresIds.length} familiares`);
+        
+        // Obtener tokens FCM de los familiares
+        let tokensToSend = [];
+        
+        // Consultar documentos de usuarios para los familiares
+        const familiaresSnapshot = await admin.firestore().collection("usuarios")
+            .where(admin.firestore.FieldPath.documentId(), "in", familiaresIds)
+            .get();
+        
+        familiaresSnapshot.forEach(doc => {
+            const familiarData = doc.data();
+            
+            // Buscar en preferencias.notificaciones.fcmToken
+            const preferencias = familiarData.preferencias || {};
+            const notificaciones = preferencias.notificaciones || {};
+            const fcmToken = notificaciones.fcmToken;
+            
+            if (fcmToken && typeof fcmToken === "string") {
+                tokensToSend.push(fcmToken);
+                console.log(`Token FCM encontrado en preferencias para familiar ${doc.id}: ${fcmToken.substring(0, 20)}...`);
+            }
+            
+            // También buscar en fcmTokens (formato alternativo)
+            const fcmTokens = familiarData.fcmTokens || {};
+            Object.values(fcmTokens).forEach(token => {
+                if (token && typeof token === "string" && !tokensToSend.includes(token)) {
+                    tokensToSend.push(token);
+                    console.log(`Token FCM adicional encontrado para familiar ${doc.id}: ${token.substring(0, 20)}...`);
+                }
+            });
+        });
+        
+        if (tokensToSend.length === 0) {
+            console.log("❌ No se encontraron tokens FCM para ningún familiar");
+            return null;
+        }
+        
+        // Formatear la fecha para el mensaje
+        const fechaFormateada = fecha.toLocaleDateString("es-ES", { 
+            day: "2-digit", 
+            month: "2-digit", 
+            year: "numeric" 
+        });
+        
+        // Preparar el mensaje de notificación
+        const titulo = "Nuevo registro de actividad";
+        const mensaje = `Se ha actualizado el registro de actividad de ${alumnoNombre} (${fechaFormateada})`;
+        
+        // Enviar notificaciones push usando FCM
+        try {
+            // Obtener el token de acceso para la API de FCM
+            const accessToken = await admin.credential.applicationDefault().getAccessToken();
+            
+            // Enviar notificación a cada token individualmente
+            const notificationPromises = tokensToSend.map(async (token) => {
+                const fcmMessage = {
+                    message: {
+                        token: token,
+                        notification: {
+                            title: titulo,
+                            body: mensaje
+                        },
+                        data: {
+                            tipo: "registro_actividad",
+                            registroId: registroId,
+                            alumnoId: alumnoId,
+                            alumnoNombre: alumnoNombre,
+                            fecha: fechaFormateada,
+                            click_action: "REGISTRO_ACTIVIDAD"
+                        },
+                        android: {
+                            priority: "high",
+                            notification: {
+                                channel_id: "channel_registros_actividad"
+                            }
+                        },
+                        apns: {
+                            payload: {
+                                aps: {
+                                    alert: {
+                                        title: titulo,
+                                        body: mensaje
+                                    },
+                                    sound: "default"
+                                }
+                            }
+                        }
+                    }
+                };
+                
+                const response = await fetch(`https://fcm.googleapis.com/v1/projects/umeegunero/messages:send`, {
+                    method: "POST",
+                    headers: {
+                        "Authorization": `Bearer ${accessToken.access_token}`,
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify(fcmMessage)
+                });
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.log(`Error enviando a token ${token.substring(0, 20)}...: ${response.status} - ${errorText}`);
+                    return { success: false, token, error: errorText };
+                }
+                
+                const result = await response.json();
+                console.log(`Notificación de registro enviada exitosamente a token ${token.substring(0, 20)}...: ${result.name}`);
+                return { success: true, token, result };
+            });
+            
+            const results = await Promise.all(notificationPromises);
+            
+            // Calcular estadísticas de éxito
+            const successCount = results.filter(r => r.success).length;
+            const failureCount = results.filter(r => !r.success).length;
+            
+            console.log(`✅ Notificaciones enviadas: ${successCount} éxitos, ${failureCount} fallos`);
+            
+            return { 
+                success: true, 
+                message: "Notificaciones de registro de actividad enviadas", 
+                stats: { success: successCount, failures: failureCount } 
+            };
+            
+        } catch (error) {
+            console.error("❌ Error al enviar notificaciones push:", error);
+            return { success: false, error: error.message };
+        }
+        
+    } catch (error) {
+        console.error("❌ Error general en procesamiento de notificación de registro:", error);
+        return { success: false, error: error.message };
+    }
+}); 
