@@ -1254,4 +1254,76 @@ exports.sendActivityRecordNotification = onDocumentCreated("registrosActividad/{
         console.error("❌ Error general en procesamiento de notificación de registro:", error);
         return { success: false, error: error.message };
     }
+});
+
+// Función para enviar email de bienvenida cuando se registra un nuevo familiar
+exports.sendWelcomeEmailOnFamiliarRegistration = onDocumentCreated("usuarios/{userId}", async (event) => {
+  const snap = event.data;
+  if (!snap) {
+    console.log("No hay datos asociados al evento de creación de usuario");
+    return;
+  }
+  
+  const userData = snap.data();
+  const userId = event.params.userId;
+  
+  console.log(`🆕 Nuevo usuario creado: ${userId}`);
+  
+  try {
+    // Verificar que es un familiar
+    const perfiles = userData.perfiles || [];
+    const esFamiliar = perfiles.some(perfil => perfil.tipo === "FAMILIAR");
+    
+    if (!esFamiliar) {
+      console.log(`Usuario ${userId} no es familiar, no se envía email de bienvenida`);
+      return;
+    }
+    
+    // Verificar que tiene email
+    if (!userData.email) {
+      console.log(`Usuario ${userId} no tiene email, no se puede enviar bienvenida`);
+      return;
+    }
+    
+    console.log(`📧 Enviando email de bienvenida a familiar: ${userData.email}`);
+    
+    // Preparar datos para el email de bienvenida
+    const params = new URLSearchParams({
+      destinatario: userData.email,
+      asunto: "Bienvenido a UmeEgunero",
+      nombre: `${userData.nombre} ${userData.apellidos}`,
+      tipoPlantilla: "BIENVENIDA_FAMILIAR",
+      centroNombre: userData.perfiles[0]?.centroId || "Centro Educativo" // Obtener nombre del centro si es posible
+    });
+    
+    const gasUrl = `${APPS_SCRIPT_EMAIL_URL}?${params.toString()}`;
+    
+    console.log(`📧 Llamando a GAS para email de bienvenida: ${gasUrl.substring(0, 100)}...`);
+    
+    const response = await fetch(gasUrl, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json"
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    const result = await response.json();
+    console.log(`📧 Respuesta de GAS:`, JSON.stringify(result));
+    
+    if (result.status === "OK") {
+      console.log(`✅ Email de bienvenida enviado exitosamente a ${userData.email}`);
+      return { success: true, result };
+    } else {
+      console.error(`❌ Error en GAS: ${result.message}`);
+      return { success: false, error: result.message };
+    }
+    
+  } catch (error) {
+    console.error("❌ Error al enviar email de bienvenida:", error);
+    return { success: false, error: error.message };
+  }
 }); 
