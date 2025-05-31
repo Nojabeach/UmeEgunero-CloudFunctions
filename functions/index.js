@@ -300,7 +300,8 @@ exports.notifyOnSolicitudVinculacionUpdated = onDocumentUpdated("solicitudes_vin
       
       console.log(`Enviando notificación: "${titulo}" - "${mensaje}"`);
       
-      // SIEMPRE enviar email vía Google Apps Script (independientemente de si hay tokens FCM)
+      // ENVIAR EMAIL ÚNICAMENTE vía Google Apps Script (no push notifications)
+      // Las notificaciones push las maneja exclusivamente Cloud Functions
       try {
         await enviarEmailViaGAS(
           familiarData.email || afterData.familiarEmail || "email@ejemplo.com",
@@ -409,9 +410,12 @@ exports.notifyOnSolicitudVinculacionUpdated = onDocumentUpdated("solicitudes_vin
 });
 
 // Función auxiliar para enviar emails vía Google Apps Script
+// IMPORTANTE: Esta función debe enviar ÚNICAMENTE EMAILS, NO notificaciones push
+// Las notificaciones push las maneja exclusivamente Cloud Functions para evitar duplicados
 async function enviarEmailViaGAS(destinatario, nombre, estado, nombreAlumno, observaciones = "") {
   try {
     console.log(`📧 Enviando email vía GAS: ${destinatario}, Estado: ${estado}, Alumno: ${nombreAlumno}`);
+    console.log(`⚠️  NOTA: GAS debe configurarse para enviar SOLO emails, NO push notifications`);
     
     const esAprobada = estado === "APROBADA";
     const asunto = esAprobada 
